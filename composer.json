@@ -1,0 +1,21 @@
+{
+  "name": "osumionline/plugin-updater",
+  "description": "Osumi Framework Composer plugin to run core migrations after framework updates.",
+  "type": "composer-plugin",
+  "license": "MIT",
+  "require": {
+    "php": ">=8.2",
+    "composer-plugin-api": "^2.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "Osumi\\OsumiFramework\\Plugins\\": "src/"
+    }
+  },
+  "extra": {
+    "class": "Osumi\\OsumiFramework\\Plugins\\OUpdater"
+  },
+  "config": {
+    "sort-packages": true
+  }
+}
