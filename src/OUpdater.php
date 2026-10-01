@@ -99,9 +99,7 @@ final class OUpdater implements PluginInterface, EventSubscriberInterface {
       return;
     }
 
-    $project_root = $this->getProjectRoot(
-      $this->composer
-    );
+    $project_root = $this->getProjectRoot();
 
     $options = Options::fromRootPackage(
       root_package: $this->composer->getPackage(),
@@ -129,10 +127,43 @@ final class OUpdater implements PluginInterface, EventSubscriberInterface {
     }
   }
 
-  private function getProjectRoot(Composer $composer): string {
-    /** @var string $vendor_dir */
-    $vendor_dir = $composer->getConfig()->get('vendor-dir');
-    return dirname($vendor_dir);
+  /**
+   * Get the Composer project root.
+   *
+   * Composer executes plugins using the active project working directory, so
+   * this remains correct even when the application uses a custom vendor-dir.
+   *
+   * @return string Canonical project root path.
+   *
+   * @throws \RuntimeException If the current working directory cannot be resolved.
+   */
+  private function getProjectRoot(): string {
+    $project_root = getcwd();
+
+    if ($project_root === false) {
+      throw new \RuntimeException(
+        'Unable to determine Composer project root.'
+      );
+    }
+
+    $resolved_root = realpath(
+      $project_root
+    );
+
+    if ($resolved_root === false) {
+      throw new \RuntimeException(
+        "Unable to resolve Composer project root '{$project_root}'."
+      );
+    }
+
+    return rtrim(
+      str_replace(
+        '\\',
+        '/',
+        $resolved_root
+      ),
+      '/'
+    );
   }
 
   /**
