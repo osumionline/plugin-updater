@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Osumi\OsumiFramework\Plugins;
 
@@ -11,7 +13,6 @@ use Composer\Script\ScriptEvents;
 use Composer\Installer\PackageEvent;
 use Composer\Script\Event;
 use Composer\Package\PackageInterface;
-use Composer\Package\RootPackageInterface;
 use Osumi\OsumiFramework\Plugins\ValueObject\OfwUpdate;
 use Osumi\OsumiFramework\Plugins\Util\Env;
 use Osumi\OsumiFramework\Plugins\Util\Options;
@@ -70,31 +71,62 @@ final class OUpdater implements PluginInterface, EventSubscriberInterface {
     );
   }
 
+  /**
+   * Run pending framework migrations after Composer has rebuilt the autoloader.
+   *
+   * The handler runs even when no framework update event was captured. This is
+   * required when plugin-updater itself is installed during the same Composer
+   * operation as the framework version that introduces migrations.
+   *
+   * @param Event $event Composer script event.
+   *
+   * @return void
+   */
   public function onPostAutoloadDump(Event $event): void {
-    if (is_null($this->ofw_update)) {
-      return;
-    }
-    if (is_null($this->composer) || is_null($this->io)) {
+    if (
+      $this->composer === null ||
+      $this->io === null
+    ) {
       return;
     }
 
-    $project_root = $this->getProjectRoot($this->composer);
+    $target_version = $this->ofw_update?->to
+      ?? $this->getInstalledFrameworkVersion(
+        $this->composer
+      );
 
-    $opts = Options::fromRootPackage(
+    if ($target_version === null) {
+      return;
+    }
+
+    $project_root = $this->getProjectRoot(
+      $this->composer
+    );
+
+    $options = Options::fromRootPackage(
       root_package: $this->composer->getPackage(),
-      dry_run: Env::getBool('OFW_DRY_RUN'),
-      force: Env::getBool('OFW_FORCE')
+      dry_run: Env::getBool(
+        'OFW_DRY_RUN'
+      ),
+      force: Env::getBool(
+        'OFW_FORCE'
+      )
     );
 
-    $this->runMigrations(
-      project_root: $project_root,
-      from: $this->ofw_update->from,
-      to: $this->ofw_update->to,
-      opts: $opts
-    );
-
-    // Reset so it doesn't run again in the same Composer execution.
-    $this->ofw_update = null;
+    try {
+      $this->runMigrations(
+        project_root: $project_root,
+        to: $target_version,
+        opts: $options
+      );
+    } finally {
+      /*
+		 * The migration state is authoritative. Clearing this event-local
+		 * information prevents duplicate update messages if Composer emits
+		 * another autoload event in the same process.
+		 */
+      $this->ofw_update = null;
+    }
   }
 
   private function getProjectRoot(Composer $composer): string {
@@ -104,44 +136,121 @@ final class OUpdater implements PluginInterface, EventSubscriberInterface {
   }
 
   /**
-   * @param array{
-   *   dryRun: bool,
-   *   force: bool,
-   *   verbose: bool,
-   *   extra: array<string, mixed>
-   * } $opts
+   * Get the framework version currently installed in Composer's local repository.
+   *
+   * This provides a target version when plugin-updater is being installed for
+   * the first time and therefore did not observe the framework package update.
+   *
+   * @param Composer $composer Active Composer instance.
+   *
+   * @return string|null Installed framework version, or null when the framework
+   *                     package is not installed.
    */
-  private function runMigrations(string $project_root, string $from, string $to, array $opts): void {
-    if (is_null($this->io)) {
+  private function getInstalledFrameworkVersion(
+    Composer $composer
+  ): ?string {
+    $package = $composer
+      ->getRepositoryManager()
+      ->getLocalRepository()
+      ->findPackage(
+        self::FRAMEWORK_PACKAGE,
+        '*'
+      );
+
+    return $package?->getPrettyVersion();
+  }
+
+  /**
+   * Run all framework migrations pending for the installed target version.
+   *
+   * The framework migration state is authoritative. Composer-managed root files
+   * are explicitly excluded from the Git cleanliness check because they may
+   * legitimately change during the Composer operation that triggered this hook.
+   *
+   * @param string $project_root Application project root.
+   * @param string $to Installed target framework version.
+   * @param array{
+   *     dryRun: bool,
+   *     force: bool,
+   *     verbose: bool,
+   *     extra: array<string, mixed>
+   * } $opts Plugin migration options.
+   *
+   * @return void
+   */
+  private function runMigrations(
+    string $project_root,
+    string $to,
+    array $opts
+  ): void {
+    if ($this->io === null) {
       return;
     }
 
-    // Runner lives in the framework (core). We only call it if available.
-    $runner_class = '\Osumi\Framework\Migrations\Runner';
+    $runner_class = '\Osumi\OsumiFramework\Migrations\Runner';
+
     if (!class_exists($runner_class)) {
-      // No output by default: plugin must be "quiet" unless needed.
-      // Uncomment if you want debug logs:
-      // $this->io->write('[OFW] Runner not found. Skipping migrations.');
+      /*
+		 * Framework versions before the migration engine are valid. The plugin
+		 * must remain silent when there is nothing it can execute.
+		 */
       return;
     }
 
-    /** @var callable $call */
-    $call = [$runner_class, 'run'];
+    $call = [
+      $runner_class,
+      'runPending'
+    ];
+
     if (!is_callable($call)) {
       return;
     }
 
-    // Only log if something is actually happening (from != to) or verbose enabled.
-    if ($opts['verbose'] || $from !== $to) {
-      $this->io->write(sprintf('[OFW] Detected framework update (%s -> %s).', $from, $to));
+    if ($this->ofw_update !== null) {
+      if (
+        $opts['verbose'] ||
+        $this->ofw_update->from !== $this->ofw_update->to
+      ) {
+        $this->io->write(
+          sprintf(
+            '[OFW] Detected framework update (%s -> %s).',
+            $this->ofw_update->from,
+            $this->ofw_update->to
+          )
+        );
+      }
+    } elseif ($opts['verbose']) {
+      $this->io->write(
+        sprintf(
+          '[OFW] Checking pending framework migrations for %s.',
+          $to
+        )
+      );
     }
 
-    $call($project_root, $from, $to, [
-      'dryRun'  => $opts['dryRun'],
-      'force'   => $opts['force'],
-      'verbose' => $opts['verbose'],
-      'io'      => $this->io,
-      'extra'   => $opts['extra'],
-    ]);
+    $io = $this->io;
+
+    $logger = static function (string $message) use ($io): void {
+      $io->write(
+        $message
+      );
+    };
+
+    $call(
+      $project_root,
+      $to,
+      [
+        'dryRun' => $opts['dryRun'],
+        'force' => $opts['force'],
+        'verbose' => $opts['verbose'],
+        'interactive' => $io->isInteractive(),
+        'gitIgnoredPaths' => [
+          'composer.json',
+          'composer.lock'
+        ],
+        'logger' => $logger,
+        'extra' => $opts['extra']
+      ]
+    );
   }
 }
