@@ -215,7 +215,7 @@ This keeps Composer-specific functionality outside the framework migration engin
 Current version:
 
 ```text
-1.0.0
+1.0.1
 ```
 
 ## License

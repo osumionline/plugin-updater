@@ -1,7 +1,7 @@
 {
 	"name": "osumionline/plugin-updater",
 	"description": "Osumi Framework Composer plugin to run core migrations after framework updates.",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"type": "composer-plugin",
 	"license": "MIT",
 	"require": {

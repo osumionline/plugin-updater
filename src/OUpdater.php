@@ -99,7 +99,9 @@ final class OUpdater implements PluginInterface, EventSubscriberInterface {
       return;
     }
 
-    $project_root = $this->getProjectRoot();
+    $project_root = $this->getProjectRoot(
+      $this->composer
+    );
 
     $options = Options::fromRootPackage(
       root_package: $this->composer->getPackage(),
@@ -130,29 +132,35 @@ final class OUpdater implements PluginInterface, EventSubscriberInterface {
   /**
    * Get the Composer project root.
    *
-   * Composer executes plugins using the active project working directory, so
-   * this remains correct even when the application uses a custom vendor-dir.
+   * The root is derived from the configuration source selected by Composer
+   * instead of the current working directory or vendor directory. This remains
+   * correct when Composer is executed from a project subdirectory or when the
+   * application uses a custom vendor-dir.
+   *
+   * @param Composer $composer Active Composer instance.
    *
    * @return string Canonical project root path.
    *
-   * @throws \RuntimeException If the current working directory cannot be resolved.
+   * @throws \RuntimeException If the root Composer file cannot be resolved.
    */
-  private function getProjectRoot(): string {
-    $project_root = getcwd();
+  private function getProjectRoot(
+    Composer $composer
+  ): string {
+    $composer_file = $composer
+      ->getConfig()
+      ->getConfigSource()
+      ->getName();
 
-    if ($project_root === false) {
-      throw new \RuntimeException(
-        'Unable to determine Composer project root.'
-      );
-    }
-
-    $resolved_root = realpath(
-      $project_root
+    $resolved_composer_file = realpath(
+      $composer_file
     );
 
-    if ($resolved_root === false) {
+    if (
+      $resolved_composer_file === false ||
+      !is_file($resolved_composer_file)
+    ) {
       throw new \RuntimeException(
-        "Unable to resolve Composer project root '{$project_root}'."
+        "Unable to resolve root Composer file '{$composer_file}'."
       );
     }
 
@@ -160,7 +168,9 @@ final class OUpdater implements PluginInterface, EventSubscriberInterface {
       str_replace(
         '\\',
         '/',
-        $resolved_root
+        dirname(
+          $resolved_composer_file
+        )
       ),
       '/'
     );
